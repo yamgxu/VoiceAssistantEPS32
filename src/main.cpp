@@ -1,13 +1,13 @@
 #include <Arduino.h>
 #include <WiFi.h>
-//#include "I2S.h"
+#include "I2S.h"
 #include "Wav.h"
 #include <SPIFFS.h>
 #include <WebSocketsClient.h>
 #include "AudioFileSourceICYStream.h"
 #include "AudioFileSourceBuffer.h"
 #include "AudioGeneratorWAV.h"
-#include "AudioOutputI2S.h"
+#include "AudioOutputI2SNoDAC.h"
 
 
 
@@ -27,7 +27,7 @@ const char *URL = "";
 AudioGeneratorWAV *wav;          // WAV 解码器
 AudioFileSourceHTTPStream *file; // 改为 HTTP 流
 AudioFileSourceBuffer *buff;
-AudioOutputI2S *out;
+AudioOutputI2SNoDAC *out;
 
 class Queue
 {
@@ -161,57 +161,10 @@ void audioTask(void *param)
         vTaskDelay(10 / portTICK_PERIOD_MS); // 如果队列为空，继续等待
         continue;
       }
-      
-    }
-    else
-    {
-      isSendingData = true;
-    }
-    vTaskDelay(10 / portTICK_PERIOD_MS); // 外层循环延迟
-  }
-}
-void webSocketTask(void *param)
-{
-  size_t bytesRead;
-
-  while (1)
-  {
-    connectwifi();
-    // 必须定期调用以保持连接
-    webSocket.loop();
-    if (isSendingData)
-    {
-      //bytesRead = I2S_Read(communicationData, sizeof(communicationData));
-      // 通过WebSocket发送音频数据
-     // if (bytesRead > 0)
-     // {
-        webSocket.sendBIN((uint8_t *)communicationData, bytesRead);
-     // }
-    }
-     vTaskDelay(10 / portTICK_PERIOD_MS);
-  }
-  
-}
-void setup()
-{
-  Serial.begin(115200);
-  audioLogger = &Serial;
-
-  // I2S_BITS_PER_SAMPLE_8BIT 配置的话，下句会报错，
-  // 最小必须配置成I2S_BITS_PER_SAMPLE_16BIT
-  // I2S_Init(I2S_MODE_RX, 16000, I2S_BITS_PER_SAMPLE_16BIT);
-
-  Serial.println("I2S_Init....");
-  //I2S_Init(I2S_MODE_RX, 16000, I2S_BITS_PER_SAMPLE_16BIT);
-  Serial.println("connectwifi....");
-  connectwifi();
-
-      char *url = "http://192.168.68.239:8080/outwav/output1726548550.1189485.wav";
-  
       Serial.printf("Playing %s\n", url);
-      out = new AudioOutputI2S(0,0);
-      out->SetPinout(10, 11, 9);
-      //out->SetGain(1);
+      out = new AudioOutputI2SNoDAC(1);
+      out->SetPinout(17, 16, 1);
+      out->SetGain(1);
       // WAV 解码器和文件流初始化
       wav = new AudioGeneratorWAV();
       wav->RegisterStatusCB(StatusCallback, (void *)"wav");
@@ -243,7 +196,74 @@ void setup()
       out = nullptr;
       Serial.println("Waiting for URL");
       vTaskDelay(10 /portTICK_PERIOD_MS);
+    }
+    else
+    {
+      isSendingData = true;
+    }
+    vTaskDelay(10 / portTICK_PERIOD_MS); // 外层循环延迟
+  }
+}
+void webSocketTask(void *param)
+{
+  size_t bytesRead;
 
+  while (1)
+  {
+    connectwifi();
+    // 必须定期调用以保持连接
+    webSocket.loop();
+    if (isSendingData)
+    {
+      bytesRead = I2S_Read(communicationData, sizeof(communicationData));
+      // 通过WebSocket发送音频数据
+      if (bytesRead > 0)
+      {
+        webSocket.sendBIN((uint8_t *)communicationData, bytesRead);
+      }
+    }
+     vTaskDelay(10 / portTICK_PERIOD_MS);
+  }
+  
+}
+void setup()
+{
+  Serial.begin(115200);
+  audioLogger = &Serial;
+
+  // I2S_BITS_PER_SAMPLE_8BIT 配置的话，下句会报错，
+  // 最小必须配置成I2S_BITS_PER_SAMPLE_16BIT
+  // I2S_Init(I2S_MODE_RX, 16000, I2S_BITS_PER_SAMPLE_16BIT);
+
+  Serial.println("I2S_Init....");
+  I2S_Init(I2S_MODE_RX, 16000, I2S_BITS_PER_SAMPLE_16BIT);
+  Serial.println("connectwifi....");
+  connectwifi();
+
+  // Start WebSocket server and assign callback
+  webSocket.begin(serverAddress, serverPort);
+  webSocket.onEvent(webSocketEvent);
+  
+
+  // 创建音频播放的任务
+  xTaskCreatePinnedToCore(
+      audioTask,    // 任务函数
+      "Audio Task", // 任务名称
+      8192,         // 任务堆栈大小
+      NULL,         // 传递给任务的参数
+      1,            // 优先级
+      NULL,         // 任务句柄
+      1             // 运行在哪个核心上
+  );
+    xTaskCreatePinnedToCore(
+      webSocketTask,    // 任务函数
+      "webSocketTask", // 任务名称
+      8192,         // 任务堆栈大小
+      NULL,         // 传递给任务的参数
+      1,            // 优先级
+      NULL,         // 任务句柄
+      0             // 运行在哪个核心上
+  );
 }
 
 void loop()
